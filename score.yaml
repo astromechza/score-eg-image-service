@@ -1,0 +1,28 @@
+apiVersion: score.dev/v1b1
+metadata:
+  name: image-service
+containers:
+  main:
+    image: ghcr.io/astromechza/score-eg-image-service:main
+    variables:
+      AMQP_CONNECTION: "amqp://${resources.queue.username}:${resources.queue.password}@${resources.queue.host}:${resources.queue.port}/${resources.queue.vhost}"
+      POSTGRES_CONNECTION: "postgresql://${resources.db.username}:${resources.db.password}@${resources.db.host}:${resources.db.port}/${resources.db.database}?sslmode=disable"
+service:
+  ports:
+    web:
+      port: 80
+      targetPort: 8080
+resources:
+  db:
+    type: postgres
+  queue:
+    type: amqp
+    id: shared
+  dns:
+    type: dns
+  route:
+    type: route
+    params:
+      host: ${resources.dns.host}
+      path: /
+      port: 80

@@ -1,0 +1,132 @@
+name: score-eg-image-service
+services:
+    image-service-main:
+        annotations:
+            compose.score.dev/workload-name: image-service
+        build:
+            context: .
+        depends_on:
+            wait-for-resources:
+                condition: service_started
+                required: false
+        environment:
+            AMQP_CONNECTION: amqp://user-zevazAFw:lY4nOtq67pOWyYD5@rabbitmq-IC3bvB:5672/vhost-GqUepGby
+            POSTGRES_CONNECTION: postgresql://user-hjKEAwPM:6OQadH7mziDypvJX@pg-23fJNn:5432/db-ZejaaigR?sslmode=disable
+        hostname: image-service
+    pg-23fJNn:
+        environment:
+            POSTGRES_PASSWORD: 6OQadH7mziDypvJX
+            POSTGRES_USER: postgres
+        healthcheck:
+            test:
+                - CMD
+                - pg_isready
+                - -U
+                - postgres
+            timeout: 2s
+            interval: 2s
+            retries: 10
+        image: postgres:16-alpine
+        restart: always
+        volumes:
+            - type: volume
+              source: pg-23fJNn-data
+              target: /var/lib/postgresql/data
+    pg-23fJNn-init:
+        command:
+            - -c
+            - |
+              cd /db-scripts
+              ls db-*.sql | xargs cat | psql "postgresql://postgres:$${POSTGRES_PASSWORD}@pg-23fJNn:5432/postgres"
+        depends_on:
+            pg-23fJNn:
+                condition: service_healthy
+                restart: true
+                required: false
+        entrypoint:
+            - /bin/sh
+        environment:
+            POSTGRES_PASSWORD: 6OQadH7mziDypvJX
+        image: postgres:16-alpine
+        labels:
+            dev.score.compose.labels.is-init-container: "true"
+        volumes:
+            - type: bind
+              source: .score-compose/mounts/pg-23fJNn-db-scripts
+              target: /db-scripts
+    rabbitmq-IC3bvB:
+        environment:
+            RABBITMQ_DEFAULT_PASS: guest
+            RABBITMQ_DEFAULT_USER: guest
+            RABBITMQ_ERLANG_COOKIE: tCIIKDFGImfLOPyFjMmD
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - rabbitmq-diagnostics -q check_port_connectivity
+            timeout: 5s
+            interval: 2s
+            retries: 5
+        image: rabbitmq:3-management-alpine
+        restart: always
+        volumes:
+            - type: volume
+              source: rabbitmq-IC3bvB-data
+              target: /var/lib/rabbitmq
+    rabbitmq-IC3bvB-init:
+        command:
+            - -c
+            - |
+              set -exu
+              for s in /db-scripts/*.sh; do source $$s; done
+        depends_on:
+            rabbitmq-IC3bvB:
+                condition: service_healthy
+                restart: true
+                required: false
+        entrypoint:
+            - /bin/sh
+        environment:
+            RABBITMQ_ERLANG_COOKIE: tCIIKDFGImfLOPyFjMmD
+        image: rabbitmq:3-management-alpine
+        labels:
+            dev.score.compose.labels.is-init-container: "true"
+        network_mode: service:rabbitmq-IC3bvB
+        volumes:
+            - type: bind
+              source: .score-compose/mounts/rabbitmq-IC3bvB-db-scripts
+              target: /db-scripts
+    routing-LZmHUQ:
+        image: nginx:1
+        ports:
+            - target: 80
+              published: "8080"
+        restart: always
+        volumes:
+            - type: bind
+              source: .score-compose/mounts/routing-LZmHUQ/nginx.conf
+              target: /etc/nginx/nginx.conf
+    wait-for-resources:
+        command:
+            - echo
+        depends_on:
+            pg-23fJNn:
+                condition: service_healthy
+                required: true
+            pg-23fJNn-init:
+                condition: service_completed_successfully
+                required: true
+            rabbitmq-IC3bvB:
+                condition: service_healthy
+                required: true
+            rabbitmq-IC3bvB-init:
+                condition: service_completed_successfully
+                required: true
+            routing-LZmHUQ:
+                condition: service_started
+                required: true
+        image: alpine
+volumes:
+    pg-23fJNn-data:
+        driver: local
+    rabbitmq-IC3bvB-data:
+        driver: local
