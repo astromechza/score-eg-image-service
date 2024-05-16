@@ -15,7 +15,7 @@ $ score-compose init
 $ curl https://raw.githubusercontent.com/astromechza/score-eg-thumbnail-service/main/score.yaml > score-thumbnail-service.yaml
 $ score-compose generate score-thumbnail-service.yaml score.yaml
 $ docker compose up -d
-$ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080"
+$ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080 "
 ```
 
 If you want to build the image from source, use the following adjustment:

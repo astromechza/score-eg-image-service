@@ -8,15 +8,15 @@
 <body>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/response-targets.js"></script>
-    <script src="https://unpkg.com/htmx.ext...chunked-transfer/dist/index.js"></script>
 
     <div class="container">
         <hr>
         <h1>Image Service</h1>
         <p>
-            This image service allows you to upload large images which will be stored as a gallery. Each image will have a thumbnail generated for it<i>asynchronously</i> by sending the image in a RabbitMQ message to another microservice.
-            Both the thumbnail and original image are stored in a Postgres Database.
+            This image service allows you to upload large images which will be stored as a gallery. Each image will have a thumbnail generated for it <i>asynchronously</i> by sending the image in a RabbitMQ message to another microservice.<br>
+            Both the thumbnail and original image are stored in a Postgres Database. A Server-Sent-Events stream is used to reload the gallery below when thumbnails have finished processing.
         </p>
+
         <hr>
     </div>
 
