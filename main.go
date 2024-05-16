@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	_ "embed"
+	"fmt"
 	"html/template"
 	"image"
 	_ "image/gif"
@@ -12,14 +13,14 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"regexp"
-	"strings"
+	"sync"
 	"time"
 
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
 	"github.com/sqids/sqids-go"
@@ -36,11 +37,19 @@ var imageListTemplate *template.Template
 func init() {
 	sqidConfig, _ = sqids.New(sqids.Options{MinLength: 10, Alphabet: "CS4LptvB7MmouJGAfqTaexczjk3PsWVhnZNd6QHDUERwb8y2XKrY95gF"})
 	imageListTemplate, _ = template.New("").Parse(`
-<table>
 {{ range . }}
-<tr><td><a href="/images/{{ index . 0 }}"><img src="/images/{{ index . 0 }}/thumbnail"/></a></td><td>{{ index . 0 }}</td><td>{{ index . 1 }}</td></tr>
+<div class="row">
+	{{ range . }}
+	<div class="column column-25">
+	  <a href="/images/{{ index . 0 }}" title="{{ index . 0 }} - {{ index . 1 }} - {{ index . 2 }} -> {{ index . 3 }}">
+		<img src="/images/{{ index . 0 }}/thumbnail"/>
+	  </a>
+	</div>
+	{{ end }}
+</div>
+{{ else }}
+<p>No images exist yet. Upload one now :)</p>
 {{ end }}
-<table>
 `)
 }
 
@@ -63,6 +72,12 @@ func mainInner() error {
 	if pgConnectionString == "" {
 		return errors.New("empty 'POSTGRES_CONNECTION'")
 	}
+
+	thumbnailGenerationRoutingKey := os.Getenv("AMQP_THUMBNAILING_ROUTING_KEY")
+	if thumbnailGenerationRoutingKey == "" {
+		return errors.New("empty 'thumbnailGenerationRoutingKey'")
+	}
+	thumbnailGeneratedRoutingKey := thumbnailGenerationRoutingKey + "-rcv"
 
 	slog.Info("connecting to AMQP", "conn", regexp.MustCompile("://.+@").ReplaceAllString(amqpConnectionString, "://<masked>@"))
 	conn, err := rabbitmq.NewConn(
@@ -97,154 +112,253 @@ CREATE TABLE IF NOT EXISTS images (
  	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
  	image BYTEA NOT NULL,
  	image_format TEXT NOT NULL,
- 	thumbnail BYTEA NULL
+ 	image_size_bytes INT NOT NULL,
+ 	thumbnail BYTEA NULL,
+ 	thumbnail_size_bytes INT NOT NULL
 )
 `); err != nil {
 		return errors.Wrap(err, "failed to create initial tables")
 	}
 
-	mux := http.NewServeMux()
+	publisher, err := rabbitmq.NewPublisher(
+		conn,
+		rabbitmq.WithPublisherOptionsLogging,
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to create publisher")
+	}
+	defer publisher.Close()
 
-	mux.HandleFunc("GET /{$}", func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write(indexHtml)
+	consumer, err := rabbitmq.NewConsumer(
+		conn,
+		thumbnailGeneratedRoutingKey,
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to bind consumer")
+	}
+	defer consumer.Close()
+
+	broadcasters := make([]chan string, 0)
+	broadcastLock := new(sync.Mutex)
+
+	go func() {
+		_ = consumer.Run(func(d rabbitmq.Delivery) (action rabbitmq.Action) {
+			id := d.CorrelationId
+			if id != "" {
+				subLogger := slog.Default().With("id", id)
+				_, _, err := image.DecodeConfig(bytes.NewReader(d.Body))
+				if err == nil {
+					res, err := db.Exec(`UPDATE images SET thumbnail = $1, thumbnail_size_bytes = $2 WHERE id = $3`, d.Body, len(d.Body), id)
+					if err != nil {
+						subLogger.Error("failed to insert thumbnail into database", "error", err)
+						return rabbitmq.NackRequeue
+					} else if c, _ := res.RowsAffected(); c > 0 {
+						subLogger.Info("thumbnail set for image")
+					} else {
+						subLogger.Warn("no images matched id")
+					}
+
+					broadcastLock.Lock()
+					defer broadcastLock.Unlock()
+					for _, broadcaster := range broadcasters {
+						broadcaster <- "ReloadImages"
+					}
+					subLogger.Info("sent event", "#broadcasters", len(broadcasters))
+				} else if len(d.Body) > 100 {
+					subLogger.Error("failed to parse thumbnail response", "error", err)
+				} else {
+					subLogger.Error("thumbnail response contains an error message", "error", string(d.Body))
+				}
+			}
+			return rabbitmq.Ack
+		})
+	}()
+
+	e := echo.New()
+	e.Use(middleware.Logger())
+	e.Use(middleware.Recover())
+
+	e.GET("/", func(c echo.Context) error {
+		return c.HTMLBlob(http.StatusOK, indexHtml)
 	})
 
-	mux.HandleFunc("GET /images/{id}/thumbnail", func(writer http.ResponseWriter, request *http.Request) {
+	e.GET("/events/", func(c echo.Context) error {
+		w := c.Response()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		w.Flush()
+
+		ch := make(chan string)
+		func() {
+			broadcastLock.Lock()
+			defer broadcastLock.Unlock()
+			broadcasters = append(broadcasters, ch)
+			slog.Info("appended broadcaster", "#broadcasters", len(broadcasters))
+		}()
+		defer func() {
+			broadcastLock.Lock()
+			defer broadcastLock.Unlock()
+			for i, broadcaster := range broadcasters {
+				if broadcaster == ch {
+					broadcasters[i] = broadcasters[len(broadcasters)-1]
+					broadcasters = broadcasters[:len(broadcasters)-1]
+					close(ch)
+				}
+			}
+			slog.Info("removed broadcaster", "#broadcasters", len(broadcasters))
+		}()
+
+		for {
+			select {
+			case <-c.Request().Context().Done():
+				return nil
+			case s := <-ch:
+				if _, err = fmt.Fprintf(w, "event: %s\ndata: \n\n", s); err != nil {
+					return err
+				}
+				slog.Info("wrote chunk")
+				w.Flush()
+			}
+		}
+	})
+
+	e.GET("/images/:id/thumbnail", func(c echo.Context) error {
 		var out []byte
-		if err := db.QueryRow(`SELECT thumbnail FROM images WHERE id = $1 AND thumbnail IS NOT NULL`, request.PathValue("id")).Scan(&out); err != nil {
+		if err := db.QueryRow(`SELECT thumbnail FROM images WHERE id = $1 AND thumbnail IS NOT NULL`, c.Param("id")).Scan(&out); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				writer.WriteHeader(http.StatusNotFound)
-				_, _ = writer.Write([]byte(http.StatusText(http.StatusNotFound)))
-				return
+				return c.String(http.StatusNotFound, http.StatusText(http.StatusNotFound))
 			}
 			slog.Error("failed to query image", "error", err)
-			writer.WriteHeader(http.StatusInternalServerError)
-			_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
+			return err
 		}
-		writer.Header().Set("Content-Type", "image/jpeg")
-		_, _ = writer.Write(out)
+		return c.Blob(http.StatusOK, "image/jpeg", out)
 	})
 
-	mux.HandleFunc("GET /images/{id}", func(writer http.ResponseWriter, request *http.Request) {
+	e.GET("/images/:id", func(c echo.Context) error {
 		var out []byte
 		var format string
-		if err := db.QueryRow(`SELECT image, image_format FROM images WHERE id = $1`, request.PathValue("id")).Scan(&out, &format); err != nil {
+		if err := db.QueryRow(`SELECT image, image_format FROM images WHERE id = $1`, c.Param("id")).Scan(&out, &format); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				writer.WriteHeader(http.StatusNotFound)
-				_, _ = writer.Write([]byte(http.StatusText(http.StatusNotFound)))
-				return
+				return c.String(http.StatusNotFound, http.StatusText(http.StatusNotFound))
 			}
 			slog.Error("failed to query image", "error", err)
-			writer.WriteHeader(http.StatusInternalServerError)
-			_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
+			return err
 		}
 		switch format {
 		case "png":
-			writer.Header().Set("Content-Type", "image/x-png")
+			return c.Blob(http.StatusOK, "image/x-png", out)
 		case "jpeg":
-			writer.Header().Set("Content-Type", "image/jpeg")
+			return c.Blob(http.StatusOK, "image/jpeg", out)
 		case "gif":
-			writer.Header().Set("Content-Type", "image/gif")
+			return c.Blob(http.StatusOK, "image/gif", out)
 		default:
-			writer.Header().Set("Content-Type", "image/unknown")
+			return c.Blob(http.StatusOK, "image/unknown", out)
 		}
-		_, _ = writer.Write(out)
 	})
 
-	mux.HandleFunc("GET /images/{$}", func(writer http.ResponseWriter, request *http.Request) {
-		if res, err := db.Query(`SELECT id, created_at FROM images ORDER BY created_at DESC`); err != nil {
+	e.GET("/images/", func(c echo.Context) error {
+		if res, err := db.Query(`SELECT id, created_at, image_size_bytes, thumbnail_size_bytes FROM images ORDER BY created_at DESC`); err != nil {
 			slog.Error("failed to query images", "error", err)
-			writer.WriteHeader(http.StatusInternalServerError)
-			_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return err
 		} else {
-			rows := make([][2]string, 0)
+			rows := make([][][4]string, 0)
+			row := make([][4]string, 0)
 			for res.Next() {
-				id, createdAt := "", time.Time{}
-				if err := res.Scan(&id, &createdAt); err != nil {
+				id, createdAt, imageBytes, thumbnailBytes := "", time.Time{}, 0, 0
+				if err := res.Scan(&id, &createdAt, &imageBytes, &thumbnailBytes); err != nil {
 					slog.Error("failed to scan image", "error", err)
-					writer.WriteHeader(http.StatusInternalServerError)
-					_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-					return
+					return err
 				}
-				rows = append(rows, [2]string{id, createdAt.Format(time.RFC1123)})
+				newRow := [4]string{id, createdAt.Format(time.RFC1123), ByteCountSI(int64(imageBytes)), ""}
+				if thumbnailBytes > 0 {
+					newRow[3] = ByteCountSI(int64(thumbnailBytes))
+				}
+				row = append(row, newRow)
+				if len(row) == 4 {
+					rows = append(rows, row)
+					row = make([][4]string, 0)
+				}
+			}
+			if len(row) > 0 {
+				rows = append(rows, row)
 			}
 			if res.Err() != nil {
 				slog.Error("failed to scan images", "error", err)
-				writer.WriteHeader(http.StatusInternalServerError)
-				_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-				return
+				return err
 			}
-			if err := imageListTemplate.Execute(writer, rows); err != nil {
+			c.Response().Header().Set("Content-Type", echo.MIMETextHTMLCharsetUTF8)
+			if err := imageListTemplate.Execute(c.Response().Writer, rows); err != nil {
 				slog.Error("failed to template images", "error", err)
-				writer.WriteHeader(http.StatusInternalServerError)
-				_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-				return
+				return err
 			}
+			return nil
 		}
 	})
 
-	mux.HandleFunc("POST /images/{$}", func(writer http.ResponseWriter, request *http.Request) {
-		content, err := io.ReadAll(io.LimitReader(request.Body, 2e+7))
+	e.POST("/images/", func(c echo.Context) error {
+		fileHeader, err := c.FormFile("file")
 		if err != nil {
-			slog.Error("failed to read request body", "error", err)
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte(http.StatusText(http.StatusBadRequest)))
-			return
+			return err
 		}
-		mediaType, params, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+		f, err := fileHeader.Open()
 		if err != nil {
-			slog.Error("failed to parse content type", "error", err)
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte(http.StatusText(http.StatusBadRequest)))
-			return
+			return err
 		}
-		if strings.HasPrefix(mediaType, "multipart/") {
-			mr := multipart.NewReader(bytes.NewReader(content), params["boundary"])
-			for {
-				p, err := mr.NextPart()
-				if err == io.EOF {
-					slog.Error("failed to find 'file' in multipart form", "error", err)
-					writer.WriteHeader(http.StatusBadRequest)
-					_, _ = writer.Write([]byte(http.StatusText(http.StatusBadRequest)))
-					return
-				}
-				if p.FormName() == "file" {
-					content, _ = io.ReadAll(p)
-					break
-				}
-			}
+		defer f.Close()
+		content, err := io.ReadAll(f)
+		if err != nil {
+			return err
 		}
-
 		_, format, err := image.DecodeConfig(bytes.NewReader(content))
 		if err != nil {
 			slog.Error("failed to decode image from request body", "error", err, "size", len(content))
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte("failed to decode image from request body"))
-			return
+			return c.String(http.StatusBadRequest, "failed to decode image from request body")
 		}
 		if _, ok := map[string]bool{"png": true, "jpeg": true, "gif": true}[format]; !ok {
 			slog.Error("unsupported image format", "format", format, "size", len(content))
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write([]byte("unsupported image format"))
-			return
+			return c.String(http.StatusBadRequest, "unsupported image format")
 		}
 
 		id, _ := sqidConfig.Encode([]uint64{rand.Uint64()})
-		if _, err := db.Exec(`INSERT INTO images (id, created_at, image, image_format) VALUES ($1, $2, $3, $4)`, id, time.Now().UTC(), content, format); err != nil {
+		if _, err := db.Exec(`INSERT INTO images (id, created_at, image, image_format, image_size_bytes, thumbnail_size_bytes) VALUES ($1, $2, $3, $4, $5, 0)`, id, time.Now().UTC(), content, format, len(content)); err != nil {
 			slog.Error("failed to insert image", "error", err)
-			writer.WriteHeader(http.StatusInternalServerError)
-			_, _ = writer.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
+			return err
 		}
 		slog.Info("uploaded image", "id", id)
-		writer.Header().Set("HX-Redirect", "/")
-		writer.WriteHeader(http.StatusCreated)
+
+		if err := publisher.Publish(
+			content, []string{thumbnailGenerationRoutingKey},
+			rabbitmq.WithPublishOptionsMessageID(id),
+			rabbitmq.WithPublishOptionsReplyTo(thumbnailGeneratedRoutingKey),
+		); err != nil {
+			// TODO: since this is a demo I'm not handling errors here properly - in theory we should do this insice a transaction with the image
+			return err
+		}
+
+		c.Response().Header().Set("HX-Trigger", "ReloadImages")
+		c.Response().WriteHeader(http.StatusCreated)
+		return nil
 	})
 
-	if err := http.ListenAndServe("0.0.0.0:8080", mux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := http.ListenAndServe("0.0.0.0:8080", e); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return errors.Wrap(err, "failed to listen and server")
 	}
 	return nil
+}
+
+func ByteCountSI(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB",
+		float64(b)/float64(div), "kMGTPE"[exp])
 }

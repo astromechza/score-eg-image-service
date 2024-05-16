@@ -1,20 +1,49 @@
 <html lang="en">
+<head>
+    <title>Image Service</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300italic,700,700italic">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.css">
+</head>
 <body>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/response-targets.js"></script>
+    <script src="https://unpkg.com/htmx.ext...chunked-transfer/dist/index.js"></script>
 
-    <div hx-get="/images/" hx-trigger="load">
+    <div class="container">
+        <hr>
+        <h1>Image Service</h1>
+        <p>
+            This image service allows you to upload large images which will be stored as a gallery. Each image will have a thumbnail generated for it<i>asynchronously</i> by sending the image in a RabbitMQ message to another microservice.
+            Both the thumbnail and original image are stored in a Postgres Database.
+        </p>
+        <hr>
     </div>
 
-    <div hx-ext="response-targets">
-        <form hx-encoding='multipart/form-data' hx-post='/images/' _='on htmx:xhr:progress(loaded, total) set #progress.value to (loaded/total)*100' hx-target-error='#form-error' hx-swap="innerHTML">
-            <input type='file' name='file'>
-            <button>
-                Upload
-            </button>
-            <progress id='progress' value='0' max='100'></progress>
+    <div class="container" hx-ext="response-targets">
+        <h3>Upload a new Image</h3>
+        <form hx-encoding='multipart/form-data' hx-post='/images/' hx-target='#form-error' hx-target-error='#form-error' hx-swap="innerHTML" hx-on::after-request="this.reset()">
+            <label for="file">File to upload</label>
+            <input type='file' name='file' id='file'>
+            <input class="button-primary" type="submit" value="Upload">
         </form>
-        <div id="form-error" hx-swap-oob="true"></div>
+        <div id="form-error"></div>
+        <hr>
     </div>
+
+    <div class="container" hx-sse="connect:/events/">
+        <h3>Images</h3>
+        <div hx-get="/images/" hx-trigger="load, ReloadImages from:body, sse:ReloadImages"></div>
+        <hr>
+    </div>
+
+    <div class="container">
+        <small>
+            <a href="https://github.com/astromechza/score-eg-thumbnail-service">github.com/astromechza/score-eg-thumbnail-service</a>
+            -
+            <a href="https://github.com/astromechza/score-eg-image-service">github.com/astromechza/score-eg-image-service</a>
+        </small>
+    </div>
+
 </body>
 </html>

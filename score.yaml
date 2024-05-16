@@ -6,6 +6,7 @@ containers:
     image: ghcr.io/astromechza/score-eg-image-service:main
     variables:
       AMQP_CONNECTION: "amqp://${resources.queue.username}:${resources.queue.password}@${resources.queue.host}:${resources.queue.port}/${resources.queue.vhost}"
+      AMQP_THUMBNAILING_ROUTING_KEY: "thumbnail-generation"
       POSTGRES_CONNECTION: "postgresql://${resources.db.username}:${resources.db.password}@${resources.db.host}:${resources.db.port}/${resources.db.database}?sslmode=disable"
 service:
   ports:

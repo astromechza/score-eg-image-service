@@ -11,6 +11,7 @@ services:
                 required: false
         environment:
             AMQP_CONNECTION: amqp://user-zevazAFw:lY4nOtq67pOWyYD5@rabbitmq-IC3bvB:5672/vhost-GqUepGby
+            AMQP_THUMBNAILING_ROUTING_KEY: thumbnail-generation
             POSTGRES_CONNECTION: postgresql://user-hjKEAwPM:6OQadH7mziDypvJX@pg-23fJNn:5432/db-ZejaaigR?sslmode=disable
         hostname: image-service
     pg-23fJNn:
@@ -105,6 +106,17 @@ services:
             - type: bind
               source: .score-compose/mounts/routing-LZmHUQ/nginx.conf
               target: /etc/nginx/nginx.conf
+    thumbnail-service-main:
+        annotations:
+            compose.score.dev/workload-name: thumbnail-service
+        depends_on:
+            wait-for-resources:
+                condition: service_started
+                required: false
+        environment:
+            AMQP_CONNECTION: amqp://user-zevazAFw:lY4nOtq67pOWyYD5@rabbitmq-IC3bvB:5672/vhost-GqUepGby
+        hostname: thumbnail-service
+        image: ghcr.io/astromechza/score-eg-thumbnail-service:main
     wait-for-resources:
         command:
             - echo
