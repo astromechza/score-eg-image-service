@@ -23,4 +23,5 @@ go.work
 .score-compose/
 compose.yaml
 score-thumbnail-service.yaml
-
+.score-k8s/
+manifests.yaml
