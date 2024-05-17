@@ -19,4 +19,8 @@
 
 # Go workspace file
 go.work
+
 .score-compose/
+compose.yaml
+score-thumbnail-service.yaml
+
