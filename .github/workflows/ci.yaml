@@ -3,6 +3,10 @@ name: Docker
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+    - README.md
+    - score.yaml
+    - *.png
 
 env:
   # Use docker.io for Docker Hub if empty
