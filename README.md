@@ -21,12 +21,13 @@ $ docker compose up -d --build
 $ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080/images/ "
 ```
 
-## With the thumbnail service and default image
+## With the thumbnail service and image override
 
 ```
 $ score-compose init
 $ curl https://raw.githubusercontent.com/astromechza/score-eg-thumbnail-service/main/score.yaml > score-thumbnail-service.yaml
-$ score-compose generate score-thumbnail-service.yaml score.yaml
+$ score-compose generate score-thumbnail-service.yaml
+$ score-compose generate score.yaml --override-property 'containers.main.image="ghcr.io/astromechza/score-eg-image-service:sha-xxxxxx"'
 $ docker compose up -d
 $ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080/images/ "
 ```
