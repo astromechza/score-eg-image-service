@@ -12,6 +12,8 @@ This service depends on the thumbnail service from <https://github.com/astromech
 
 ## Without the thumbnail service and building the container image from source
 
+**NOTE**: without the thumbnail service, the UI will render loading gifs in place of thumbnails.
+
 ```
 $ score-compose init
 $ score-compose generate score.yaml --build main=.

@@ -41,9 +41,13 @@ func init() {
 <div class="row">
 	{{ range . }}
 	<div class="column column-25">
+      {{ if index . 3 }}
 	  <a href="/images/{{ index . 0 }}" title="{{ index . 0 }} - {{ index . 1 }} - {{ index . 2 }} -> {{ index . 3 }}">
 		<img src="/images/{{ index . 0 }}/thumbnail"/>
 	  </a>
+      {{ else }}
+		<div class="lds-spinner"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
+      {{ end }}
 	</div>
 	{{ end }}
 </div>
