@@ -178,11 +178,19 @@ CREATE TABLE IF NOT EXISTS images (
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
-	e.GET("/", func(c echo.Context) error {
+	e.GET("/alive", func(c echo.Context) error {
+		return nil
+	})
+
+	e.GET("/ready", func(c echo.Context) error {
+		return db.PingContext(c.Request().Context())
+	})
+
+	e.GET("/images/", func(c echo.Context) error {
 		return c.HTMLBlob(http.StatusOK, indexHtml)
 	})
 
-	e.GET("/events/", func(c echo.Context) error {
+	e.GET("/images/events", func(c echo.Context) error {
 		w := c.Response()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -225,41 +233,7 @@ CREATE TABLE IF NOT EXISTS images (
 		}
 	})
 
-	e.GET("/images/:id/thumbnail", func(c echo.Context) error {
-		var out []byte
-		if err := db.QueryRow(`SELECT thumbnail FROM images WHERE id = $1 AND thumbnail IS NOT NULL`, c.Param("id")).Scan(&out); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return c.String(http.StatusNotFound, http.StatusText(http.StatusNotFound))
-			}
-			slog.Error("failed to query image", "error", err)
-			return err
-		}
-		return c.Blob(http.StatusOK, "image/jpeg", out)
-	})
-
-	e.GET("/images/:id", func(c echo.Context) error {
-		var out []byte
-		var format string
-		if err := db.QueryRow(`SELECT image, image_format FROM images WHERE id = $1`, c.Param("id")).Scan(&out, &format); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return c.String(http.StatusNotFound, http.StatusText(http.StatusNotFound))
-			}
-			slog.Error("failed to query image", "error", err)
-			return err
-		}
-		switch format {
-		case "png":
-			return c.Blob(http.StatusOK, "image/x-png", out)
-		case "jpeg":
-			return c.Blob(http.StatusOK, "image/jpeg", out)
-		case "gif":
-			return c.Blob(http.StatusOK, "image/gif", out)
-		default:
-			return c.Blob(http.StatusOK, "image/unknown", out)
-		}
-	})
-
-	e.GET("/images/", func(c echo.Context) error {
+	e.GET("/images/snippet", func(c echo.Context) error {
 		if res, err := db.Query(`SELECT id, created_at, image_size_bytes, thumbnail_size_bytes FROM images ORDER BY created_at DESC`); err != nil {
 			slog.Error("failed to query images", "error", err)
 			return err
@@ -341,6 +315,40 @@ CREATE TABLE IF NOT EXISTS images (
 		c.Response().Header().Set("HX-Trigger", "ReloadImages")
 		c.Response().WriteHeader(http.StatusCreated)
 		return nil
+	})
+
+	e.GET("/images/:id/thumbnail", func(c echo.Context) error {
+		var out []byte
+		if err := db.QueryRow(`SELECT thumbnail FROM images WHERE id = $1 AND thumbnail IS NOT NULL`, c.Param("id")).Scan(&out); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.String(http.StatusNotFound, http.StatusText(http.StatusNotFound))
+			}
+			slog.Error("failed to query image", "error", err)
+			return err
+		}
+		return c.Blob(http.StatusOK, "image/jpeg", out)
+	})
+
+	e.GET("/images/:id", func(c echo.Context) error {
+		var out []byte
+		var format string
+		if err := db.QueryRow(`SELECT image, image_format FROM images WHERE id = $1`, c.Param("id")).Scan(&out, &format); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.String(http.StatusNotFound, http.StatusText(http.StatusNotFound))
+			}
+			slog.Error("failed to query image", "error", err)
+			return err
+		}
+		switch format {
+		case "png":
+			return c.Blob(http.StatusOK, "image/x-png", out)
+		case "jpeg":
+			return c.Blob(http.StatusOK, "image/jpeg", out)
+		case "gif":
+			return c.Blob(http.StatusOK, "image/gif", out)
+		default:
+			return c.Blob(http.StatusOK, "image/unknown", out)
+		}
 	})
 
 	if err := http.ListenAndServe("0.0.0.0:8080", e); err != nil && !errors.Is(err, http.ErrServerClosed) {

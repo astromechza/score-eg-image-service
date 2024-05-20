@@ -8,25 +8,28 @@ This service depends on the thumbnail service from <https://github.com/astromech
 
 ![architecture](architecture.drawio.png)
 
-# Testing with Score
+# Testing with Score Compose
+
+## Without the thumbnail service and building the container image from source
+
+```
+$ score-compose init
+$ score-compose generate score.yaml --build main=.
+$ docker compose up -d --build
+$ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080/images/ "
+```
+
+## With the thumbnail service and default image
 
 ```
 $ score-compose init
 $ curl https://raw.githubusercontent.com/astromechza/score-eg-thumbnail-service/main/score.yaml > score-thumbnail-service.yaml
 $ score-compose generate score-thumbnail-service.yaml score.yaml
 $ docker compose up -d
-$ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080 "
+$ score-compose resources get-outputs 'dns.default#image-service.dns' --format "http://{{ .host }}:8080/images/ "
 ```
 
-If you want to build the image from source, use the following adjustment:
-
-```
-$ score-compose generate score-thumbnail-service.yaml
-$ score-compose generate score.yaml --build main=.
-$ docker compose up -d --build
-```
-
-# Deploying with Score
+## Deploying with Score Kubernetes
 
 ```
 $ score-k8s init

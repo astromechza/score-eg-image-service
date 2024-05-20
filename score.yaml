@@ -1,29 +1,59 @@
+# The version string helps identify the Score file syntax
 apiVersion: score.dev/v1b1
 metadata:
   name: image-service
+  annotations:
+    acme.corp/team-name: Images Team
+
+# A set of containers deployed together for this Workload.
 containers:
   main:
+    # The "default" image for our service. When deploying, we may override this with a particular tag.
     image: ghcr.io/astromechza/score-eg-image-service:main
     variables:
+      # Pass the resource outputs to our container as environment variables. The Score implementation takes care of securing any secret access as needed.
       AMQP_CONNECTION: "amqp://${resources.queue.username}:${resources.queue.password}@${resources.queue.host}:${resources.queue.port}/${resources.queue.vhost}"
       AMQP_THUMBNAILING_ROUTING_KEY: "thumbnail-generation"
       POSTGRES_CONNECTION: "postgresql://${resources.db.username}:${resources.db.password}@${resources.db.host}:${resources.db.port}/${resources.db.database}?sslmode=disable"
+
+    # Define the resource footprint required by this container in the Workload.
+    resources:
+      requests:
+        cpu: "0.25"
+        memory: 500Mi
+    # Only route traffic to it when it's ready
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 8080
+    livenessProbe:
+      httpGet:
+        path: /alive
+        port: 8080
+
+# The service ports indicate which ports of the Workload are exposed for other services to call.
 service:
   ports:
     web:
       port: 80
       targetPort: 8080
+
+# Each resource dependency has a name and definition that helps the Score implementation link or provision the required resource.
 resources:
   db:
+    # This database is specific to this Workload and not shared.
     type: postgres
   queue:
+    # This AMQP queue is shared by id between Workloads.
     type: amqp
-    id: shared
+    id: common-queue
   dns:
+    # Ensure a dns name is available for request routing.
     type: dns
   route:
+    # We want to ensure that requests on the Workload hostname with a prefix of /images/ go to our service port.
     type: route
     params:
       host: ${resources.dns.host}
-      path: /
+      path: /images/
       port: 80

@@ -31,9 +31,9 @@
         <hr>
     </div>
 
-    <div class="container" hx-sse="connect:/events/">
+    <div class="container" hx-sse="connect:/images/events">
         <h3>Images</h3>
-        <div hx-get="/images/" hx-trigger="load, ReloadImages from:body, sse:ReloadImages"></div>
+        <div hx-get="/images/snippet" hx-trigger="load, ReloadImages from:body, sse:ReloadImages"></div>
         <hr>
     </div>
 
