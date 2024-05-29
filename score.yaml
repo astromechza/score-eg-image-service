@@ -9,7 +9,7 @@ metadata:
 containers:
   main:
     # The "default" image for our service. When deploying, we may override this with a particular tag.
-    image: ghcr.io/astromechza/score-eg-image-service:main
+    image: ghcr.io/astromechza/score-eg-image-service:sha-182467a
     variables:
       # Pass the resource outputs to our container as environment variables. The Score implementation takes care of securing any secret access as needed.
       AMQP_CONNECTION: "amqp://${resources.queue.username}:${resources.queue.password}@${resources.queue.host}:${resources.queue.port}/${resources.queue.vhost}"
